@@ -1,0 +1,270 @@
+
+clear; %close all;
+addpath(genpath('/ligo/svncommon/SeiSVN/seismic/Common/MatlabTools/'));
+
+aa=3;
+if aa==1
+OR='O13';
+%----O1
+start_time = 1126623617;
+endtime=1136649617;
+duration=endtime-start_time;
+end;
+
+if aa==2
+OR='O23';
+%----O2
+start_time = 1164556817;
+endtime=1187733618;
+duration=endtime-start_time;
+end;
+
+if aa==3
+OR='O3a4';
+%----O3a------------
+start_time=1238166018;
+duration   = 1253977218-start_time;
+end;
+
+if aa==4
+OR='O3b4';
+%----O3b------------
+start_time=1256655618;
+%duration   = 1262677518-1256655618;
+duration = 1269363618-start_time;
+end;
+
+bw='minute'; 
+
+chn={'ETMX_Z','ITMY_Z','ETMY_Z','ETMX_X','ITMY_Y','ETMY_Y'};
+% chnplt={'ITMX_ST1_FFB_BLRMS_Z','ETMX_ST1_FFB_BLRMS_Z','ITMY_ST1_FFB_BLRMS_Z','ETMY_ST1_FFB_BLRMS_Z','ITMX_ST1_FFB_BLRMS_X','ETMX_ST1_FFB_BLRMS_X','ITMY_ST1_FFB_BLRMS_Y','ETMY_ST1_FFB_BLRMS_Y'};
+
+for jj=1:length(chn)
+   tmp=cdsgetdata(['L1:ISI-GND_STS_' chn{jj} '_BLRMS_30M_100M'],bw,start_time,duration);
+   channelRMS(jj,:)=tmp.data;
+end;
+
+Fs = tmp.rate;
+Ts = 1/Fs;
+time = [Ts:Ts:duration]/3600/24;time1=time;
+
+Lockbit=cdsgetdata('L1:GRD-ISC_LOCK_STATE_N',bw,start_time,duration);
+Lockbit=Lockbit.data;
+
+%------finding EQ that show up in all vertical BLRMS
+flag=0;
+peakwidth=5; %I would leave it as it is
+if aa>1
+    peakprom=200; %LHO has different ground motion from LLO. Jim should choose the appropriate set point for LHO.
+else
+    peakprom=130;
+end;
+peakdist=60; %leave it. This should be at least 60.
+
+for jj=1:3%length(chn)/2
+        if flag==1
+            [pks,locs,widths,proms] = findpeaks(channelRMS(jj,:),'MinPeakWidth',peakwidth,'MinPeakProminence',peakprom,'Annotate','extents','MinPeakDistance',peakdist);
+            if isempty(locs) == 0
+                tmplocs=ismembertol(reallocs,locs,1e-4).*reallocs;
+                reallocs=tmplocs(tmplocs>0);
+            end;
+        else  %----------This is the first search for EQ peaks
+            [pks,locs,widths,proms] = findpeaks(channelRMS(jj,:),'MinPeakWidth',peakwidth,'MinPeakProminence',peakprom,'Annotate','extents','MinPeakDistance',peakdist);
+            reallocs=locs;
+            if isempty(locs) == 0
+                flag=1;
+            end;
+        end;
+end;
+
+%--------------taking max of peak in 60 minute range
+reallocsmax=zeros(1,length(reallocs));
+for jj=1:length(reallocs)
+    [~,ind]=max(channelRMS(1,reallocs(jj)-30:reallocs(jj)+30));
+    reallocsmax(jj)=reallocs(jj)-31+ind;
+end;
+
+numel(find(reallocs~=reallocsmax));
+
+surv=[];
+loss=[];
+minutes=25; %"some minutes"
+
+%--------------- finding to which ones we lost lock "some" mins prior to EQ - and also for the ones we survived------------------------
+for ii=1:length(reallocsmax)
+    if Lockbit(reallocsmax(ii):reallocsmax(ii)+20)>=2000 %only if we were actually at low noise when the peak of EQ hit. THIS IS FOR LLO
+       surv=[surv reallocsmax(ii)];
+    end;
+    if Lockbit(reallocsmax(ii))<=10 %only if we were actually down when the peak of EQ hit. THIS IS FOR LLO
+        Locklosstime=find(Lockbit(1:reallocsmax(ii))>=2000,1,'last');  % only when we were at low noise. THIS IS FOR LHO.     
+        
+        if (reallocsmax(ii)-Locklosstime)< minutes       
+            loss=[loss Locklosstime];
+        end;
+    end;
+end;
+
+RMSvert_survGND=zeros(1,length(surv));
+RMShor_survGND=zeros(1,length(surv));
+%RMSvert_survPLT=zeros(1,length(surv));
+%RMShor_survPLT=zeros(1,length(surv));
+counthor=0; countvert=0;
+EQmodestat=[];
+%-------------- Lock survival statistics for EQs --------
+for jj=1:length(chn)
+    RMSsurvGND=[];
+%    RMSsurvPLT=[];    
+    %getting the statistics
+    
+    for ii=1:length(surv)
+        steq=start_time+(surv(ii)-1)*60;
+         channelname=['L1:ISI-GND_STS_' chn{jj} '_BLRMS_30M_100M'];
+%      channelname=['L1:ISI-GND_STS_' chn{jj} '_DQ'];
+      tmp=cdsgetdata(channelname,'second',steq,2*60);      
+      survtimeserbp = max(tmp.data);%rms(bandpass_viafft(hann(1*60).*tmp.data, 1, 0.03, 0.1));%channelRMS(jj,surv(ii));
+      RMSsurvGND=[RMSsurvGND survtimeserbp];
+      if jj==1
+         channelname_SC=['L1:ISI-ITMY_ST1_SENSCOR_Y_FADE_CUR_CHAN_MON'];
+         tmp=cdsgetdata(channelname_SC,'second',steq+60,1);      
+      
+%rms(bandpass_viafft(hann(1*60).*tmp.data, 1, 0.03, 0.1));
+%         tmp=cdsgetdata(channelname,'second',steq,1*60);
+%         survtimeserbp = mean(tmp.data);
+         EQmodestat=[EQmodestat tmp.data];
+      end;
+%-------------------------------------------
+%      channelname=['L1:ISI-' chn{jj}(1:4) '_ST1_BLND_' chn{jj}(6) '_T240_CUR_IN1_DQ'];
+%      tmp=cdsgetdata(channelname,'second',steq,2*60);
+%      survtimeserbp = rms(bandpass_viafft(hann(2*60).*tmp.data, 1, 0.03, 0.1));
+%         tmp=cdsgetdata(channelname,'second',steq,1*60);
+%         survtimeserbp = mean(tmp.data);
+%        RMSsurvPLT=[RMSsurvPLT survtimeserbp];
+    end;
+    
+% summing
+%    if jj<=3%length(chn)/2
+%        if RMSsurvGND~=zeros(1,length(surv))
+%            RMSvert_survGND=RMSvert_survGND+RMSsurvGND;
+%%            RMSvert_survPLT=RMSvert_survPLT+RMSsurvPLT;
+%            countvert=countvert+1;
+%        end;
+%    end;
+%    if jj>3%length(chn)/2
+%        if RMSsurvGND~=zeros(1,length(surv))
+%            RMShor_survGND=RMShor_survGND+RMSsurvGND;
+%%            RMShor_survPLT=RMShor_survPLT+RMSsurvPLT;
+%            counthor=counthor+1;
+%        end;
+%    end; 
+% max
+    if jj<=3%length(chn)/2
+        if RMSsurvGND~=zeros(1,length(surv))
+            RMSvert_survGND=max(RMSvert_survGND,RMSsurvGND);
+%%            RMSvert_survPLT=RMSvert_survPLT+RMSsurvPLT;
+%            countvert=countvert+1;
+        end;
+    end;
+    if jj>3%length(chn)/2
+        if RMSsurvGND~=zeros(1,length(surv))
+            RMShor_survGND=max(RMShor_survGND,RMSsurvGND);
+%%            RMShor_survPLT=RMShor_survPLT+RMSsurvPLT;
+%            counthor=counthor+1;
+        end;
+    end;  
+end;
+%RMSvert_survGND=RMSvert_survGND./countvert;
+%RMShor_survGND=RMShor_survGND./counthor;
+%RMSvert_survPLT=RMSvert_survPLT./countvert;
+%RMShor_survPLT=RMShor_survPLT./counthor;
+
+%figure(1);hold on;
+%cdfplot(RMSvert_survGND);xlim([0 1500]);ylim([0 1]);title ('Lock survival - Vertical');xlabel('Ground RMS velocity (nm/sec)');ylabel('Cumulative %distribution function');
+
+%figure(2);hold on;
+%cdfplot(RMShor_survGND);xlim([0 1500]);ylim([0 1]);title ('Lock survival - Horizontal');xlabel('Ground RMS velocity (nm/sec)');ylabel('Cumulative %distribution function');
+
+
+%RMSvert_lossGND=zeros(1,length(loss));
+%RMShor_lossGND=zeros(1,length(loss));
+%%RMSvert_lossPLT=zeros(1,length(loss));
+%%RMShor_lossPLT=zeros(1,length(loss));
+counthor=0; countvert=0;
+
+%-------------- Lockloss statistics for EQs--------------------------------
+%for jj=1:length(chn)
+%    RMSlossGND=[];
+%    RMSlossPLT=[]; 
+   
+    %getting the statistics
+    
+%    for ii=1:length(loss)
+%--------------- ADDED CODE to improve RMS data during lockloss --------
+%      steq=start_time+(loss(ii)-1)*60;
+%%      channelname=['L1:ISI-GND_STS_' chn{jj} '_BLRMS_30M_100M'];
+%      channelname=['L1:ISI-GND_STS_' chn{jj} '_DQ'];
+%      tmp=cdsgetdata(channelname,'second',steq,1*60);
+%      losstimeserbp = rms(bandpass_viafft(hann(1*60).*tmp.data, 1, 0.03, 0.1));
+%      RMSlossGND=[RMSlossGND losstimeserbp];
+%--------------------------------------------------------------------
+%%      channelname=['L1:ISI-' chn{jj}(1:4) '_ST1_BLND_' chn{jj}(6) '_T240_CUR_IN1_DQ'];
+%%      tmp=cdsgetdata(channelname,'second',steq,1*60);
+%%      losstimeserbp = rms(bandpass_viafft(hann(1*60).*tmp.data, 1, 0.03, 0.1));
+%%      RMSlossPLT=[RMSlossPLT losstimeserbp];
+%--------------------------------------------------------------------
+%%       losstimeserbp = mean(tmp.data);
+
+%    end;
+    
+% summing
+%%    if jj<=3%length(chn)/2
+%%        if RMSlossGND~=zeros(1,length(loss))
+%%            RMSvert_lossGND=RMSvert_lossGND+RMSlossGND;
+%%            RMSvert_lossPLT=RMSvert_lossPLT+RMSlossPLT;
+%%            countvert=countvert+1;
+%%        end;
+%%    end;
+%%    if jj>3%length(chn)/2
+%%        if RMSlossGND~=zeros(1,length(loss))
+%%            RMShor_lossGND=RMShor_lossGND+RMSlossGND;
+%%            RMShor_lossPLT=RMShor_lossPLT+RMSlossPLT;
+%%            counthor=counthor+1;
+%%        end;
+%%    end;
+% maxing
+%    if jj<=3%length(chn)/2
+%        if RMSlossGND~=zeros(1,length(loss))
+%            RMSvert_lossGND=max(RMSvert_lossGND,RMSlossGND);
+%%            RMSvert_lossPLT=RMSvert_lossPLT+RMSlossPLT;
+%%            countvert=countvert+1;
+%        end;
+%    end;
+%    if jj>3%length(chn)/2
+%        if RMSlossGND~=zeros(1,length(loss))
+%            RMShor_lossGND=max(RMShor_lossGND,RMSlossGND);
+%%            RMShor_lossPLT=RMShor_lossPLT+RMSlossPLT;
+%%            counthor=counthor+1;
+%        end;
+%    end;
+%end;
+
+
+% 
+%%RMSvert_lossGND=RMSvert_lossGND./countvert;
+%%RMShor_lossGND=RMShor_lossGND./counthor;
+%%RMSvert_lossPLT=RMSvert_lossPLT./countvert;
+%%RMShor_lossPLT=RMShor_lossPLT./counthor;
+
+%figure(3);hold on;
+%cdfplot(RMSvert_lossGND);xlim([0 1500]);ylim([0 1]);title ('Lock loss - Vertical');xlabel('Ground RMS velocity (nm/sec)');ylabel('Cumulative %distribution function');
+
+%figure(4);hold on;
+%cdfplot(RMShor_lossGND);xlim([0 1500]);ylim([0 1]);title ('Lock loss - Horizontal');xlabel('Ground RMS velocity (nm/sec)');ylabel('Cumulative %distribution function');
+
+distver=max(channelRMS(1:3,reallocsmax));
+%mean(mean(channelRMS(:,reallocsmax)))
+disthor=max(channelRMS(4:6,reallocsmax));
+
+%save the averaged data
+save(['Observ' OR '.mat'],'reallocsmax','loss','surv','RMSvert_survGND','RMShor_survGND','EQmodestat','disthor','distver');%,'RMSvert_lossGND','RMShor_lossGND');
+%,'RMSvert_survPLT','RMShor_survPLT','RMSvert_lossPLT','RMShor_lossPLT')
+
